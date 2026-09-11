@@ -1,4 +1,5 @@
 import requests
+import urllib3
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 import re
@@ -10,6 +11,11 @@ import os
 from datetime import datetime
 from html import escape
 from Crypto.Cipher import AES
+
+# ==========================================
+# إخفاء تحذيرات تجاهل فحص شهادة الـ SSL
+# ==========================================
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 STATUS_FILE = os.path.join(os.path.dirname(__file__), "..", "bot_status.json")
 STATE_FILE  = os.path.join(os.path.dirname(__file__), "..", "bot_series_state.json")
@@ -80,7 +86,7 @@ YOUR_API_URL = "https://arabfleex.live/api.php"
 SECRET_KEY = "ArabFleex_2024_SecRet"
 TELEGRAM_TOKEN = "8692766022:AAEsjS3IrZ3nafTa8WsRu70oKQ2lrsb5tkk"
 TELEGRAM_CHAT_ID = "1013251619" 
-NOTIFY_ONLY = True  
+NOTIFY_ONLY = False  # تم تعديلها لتكون False لكي يقوم البوت بالرفع الفعلي
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
@@ -171,7 +177,8 @@ def detect_active_domain(site_label, known_domains, exclude_domains, content_key
 
     def try_domain(domain):
         try:
-            r = requests.get(domain, headers=HEADERS, timeout=10, allow_redirects=True)
+            # إضافة verify=False هنا لتجنب مشاكل SSL في دومينات لاروزا
+            r = requests.get(domain, headers=HEADERS, timeout=10, allow_redirects=True, verify=False)
             if r.status_code != 200: return None
             final = f"{urlparse(r.url).scheme}://{urlparse(r.url).netloc}"
             if any(ex in final for ex in exclude_domains): return None
@@ -200,7 +207,7 @@ def detect_active_domain(site_label, known_domains, exclude_domains, content_key
     print(f"[*] جاري البحث في DuckDuckGo عن دومين {site_label} الحالي...")
     for query in search_queries:
         try:
-            req = requests.post("https://lite.duckduckgo.com/lite/", headers=HEADERS, data={"q": query}, timeout=15)
+            req = requests.post("https://lite.duckduckgo.com/lite/", headers=HEADERS, data={"q": query}, timeout=15, verify=False)
             soup = BeautifulSoup(req.text, 'html.parser')
             for a in soup.find_all('a', href=True):
                 href = a.get('href', '')
@@ -223,23 +230,10 @@ def detect_active_domain(site_label, known_domains, exclude_domains, content_key
     return fallback_domain
 
 
-def get_current_laroza_domain():
-    priority_domain = load_manual_domain()
-    return detect_active_domain(
-        site_label="لاروزا",
-        known_domains=[LAROZA_DOMAIN, *LAROZA_KNOWN_DOMAINS],
-        exclude_domains=["youtube.com", "dailymotion.com", "yandex.com", "facebook.com",
-                          "twitter.com", "laaroza-tv.com", "cima.laaroza", "larozaa.top"],
-        content_keywords=["view-serie", "مسلسل", "حلقة", "larozz", "laroza", "larooza"],
-        search_keywords=["larozaa", "larozza", "laroza", "larooza"],
-        search_queries=["موقع لاروزا", "larozza site", "laroza مسلسلات"],
-        fallback_domain=LAROZA_DOMAIN,
-        priority_domain=priority_domain,
-    )
-
 def get_infinity_session(url):
     session = requests.Session()
     session.headers.update(HEADERS)
+    session.verify = False  # <--- حل مشكلة SSL هنا 
     try:
         res = session.get(url, timeout=15)
         if "toNumbers" in res.text and "slowAES.decrypt" in res.text:
@@ -264,7 +258,8 @@ def send_telegram_msg(message, chat_id=None):
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             data={"chat_id": chat_id or TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"},
-            timeout=10
+            timeout=10,
+            verify=False
         )
     except: pass
 
@@ -300,6 +295,7 @@ def get_full_url(link, current_domain):
 def fetch_page(url, max_hops=8):
     session = requests.Session()
     session.headers.update(HEADERS)
+    session.verify = False # <--- حل مشكلة SSL هنا 
     for _ in range(max_hops):
         try:
             res = session.get(url, timeout=15, allow_redirects=True)
@@ -383,7 +379,7 @@ def _apply_restore(json_text, chat_id):
         send_telegram_msg(f"❌ فشل في الاستعادة! تأكد من كود الـ JSON.\nالخطأ: {e}", chat_id=chat_id)
 
 def get_last_ep_from_api(series_id):
-    global api_session # تم نقلها إلى السطر الأول في الدالة لتجنب الانهيار (SyntaxError)
+    global api_session
     try:
         req_api = api_session.post(
             YOUR_API_URL,
@@ -412,7 +408,7 @@ def telegram_commands_listener():
             params = {"timeout": 30}
             if offset: params["offset"] = offset
             
-            resp = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", params=params, timeout=35)
+            resp = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", params=params, timeout=35, verify=False)
             data = resp.json()
             
             if not data.get("ok"):
@@ -445,7 +441,6 @@ def telegram_commands_listener():
                             send_telegram_msg("مفيش عملية شغالة عشان تتلغي.", chat_id=chat_id)
                         continue
 
-                    # --- نظام الخطوة بخطوة لإضافة مسلسل ---
                     if chat_id in _addseries_states:
                         state = _addseries_states[chat_id]
                         if state["step"] == "name":
@@ -467,7 +462,6 @@ def telegram_commands_listener():
                                 TARGET_SERIES[s_name] = {"url": s_url, "db_id": s_id}
                                 save_target_series(TARGET_SERIES)
                                 
-                                # -- جلب آخر حلقة من الـ API وتخزينها محلياً --
                                 send_telegram_msg("⏳ جاري الاتصال بموقعك لمعرفة آخر حلقة مرفوعة...", chat_id=chat_id)
                                 last_ep, last_link = get_last_ep_from_api(s_id)
                                 
@@ -508,7 +502,7 @@ def telegram_commands_listener():
                                     send_telegram_msg(f"📦 <b>النسخة الاحتياطية (الحالة المحلية):</b>\n<pre>{escape(json_str)}</pre>", chat_id=chat_id)
                                 else:
                                     with open(STATE_FILE, 'rb') as f:
-                                        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument", data={"chat_id": chat_id, "caption": "📦 ملف النسخة الاحتياطية"}, files={"document": f}, timeout=15)
+                                        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument", data={"chat_id": chat_id, "caption": "📦 ملف النسخة الاحتياطية"}, files={"document": f}, timeout=15, verify=False)
                         except Exception as e: send_telegram_msg(f"❌ خطأ: {e}", chat_id=chat_id)
 
                     elif text.startswith("/restore"):
@@ -520,7 +514,6 @@ def telegram_commands_listener():
                             _pending_restore_chats.add(chat_id)
                             send_telegram_msg("📩 أرسل كود JSON الآن لاستعادة النسخة الاحتياطية\n(لإلغاء العملية ارسل /cancel):", chat_id=chat_id)
 
-                    # --- أوامر التحكم في المسلسلات ---
                     elif text.startswith("/addseries"):
                         _addseries_states[chat_id] = {"step": "name"}
                         send_telegram_msg("📝 <b>إضافة مسلسل جديد للمراقبة</b>\n<i>(لو حابب تلغي العملية في أي وقت ابعت /cancel)</i>\n\n1️⃣ <b>ابعت اسم المسلسل دلوقتي:</b>", chat_id=chat_id)
@@ -534,7 +527,6 @@ def telegram_commands_listener():
                             del TARGET_SERIES[s_name]
                             save_target_series(TARGET_SERIES)
                             
-                            # تنظيف الذاكرة الخاصة بيه برضه
                             state = load_series_state()
                             if str(db_id) in state:
                                 del state[str(db_id)]
@@ -555,7 +547,6 @@ def telegram_commands_listener():
                                 msg += f"• <b>{k}</b> (ID: {v['db_id']}) - آخر حلقة مسجلة: {ep_info}\n"
                             send_telegram_msg(msg, chat_id=chat_id)
 
-                    # --- أوامر التحكم في الدومين ---
                     elif text.startswith("/setdomain"):
                         parts = text.split(maxsplit=1)
                         if len(parts) < 2 or not parts[1].strip():
@@ -590,7 +581,7 @@ def extract_servers(episode_url, current_domain):
         vid = vid_match.group(1)
 
         play_url = f"{current_domain}/play.php?vid={vid}"
-        req_play = requests.get(play_url, headers=HEADERS, timeout=15)
+        req_play = requests.get(play_url, headers=HEADERS, timeout=15, verify=False)
         soup_play = BeautifulSoup(req_play.text, 'html.parser')
         site_netloc = urlparse(current_domain).netloc.lower()
         known_laroza_hosts = {urlparse(domain).netloc.lower() for domain in LAROZA_KNOWN_DOMAINS}
@@ -620,7 +611,7 @@ def extract_servers(episode_url, current_domain):
             for i in range(4): data["watch"][i] = watch_servers[i] if i < len(watch_servers) else watch_servers[-1]
 
         dl_url = f"{current_domain}/download.php?vid={vid}"
-        req_dl = requests.get(dl_url, headers=HEADERS, timeout=15)
+        req_dl = requests.get(dl_url, headers=HEADERS, timeout=15, verify=False)
         soup_dl = BeautifulSoup(req_dl.text, 'html.parser')
 
         download_links = []
@@ -752,7 +743,6 @@ def run_bot():
         state_key = str(db_id)
         series_domain = resolve_series_domain(series_name, series_info, current_domain)
 
-        # الاعتماد الكلي على الذاكرة المحلية (توفير Hits)
         stored_data = series_state.get(state_key, {})
         last_ep = stored_data.get('last_ep', 0)
         current_last_link = stored_data.get('last_watch_link', "")
