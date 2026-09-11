@@ -1,1 +1,3 @@
-requestsbeautifulsoup4pycryptodome
+requests
+beautifulsoup4
+pycryptodome
