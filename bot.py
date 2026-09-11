@@ -360,6 +360,7 @@ def build_status_message():
 
 _pending_setdomain_chats = set()
 _pending_restore_chats = set()
+_addseries_states = {}  # قاموس لحفظ حالة إضافة المسلسل خطوة بخطوة
 
 def _apply_manual_domain(new_domain, chat_id):
     new_domain = new_domain.strip().rstrip("/")
@@ -412,6 +413,49 @@ def telegram_commands_listener():
                     text = text.strip()
                     chat_id = msg.get("chat", {}).get("id")
 
+                    if text == "/cancel":
+                        if chat_id in _addseries_states:
+                            del _addseries_states[chat_id]
+                            send_telegram_msg("❌ تم إلغاء عملية إضافة المسلسل.", chat_id=chat_id)
+                        elif chat_id in _pending_restore_chats:
+                            _pending_restore_chats.discard(chat_id)
+                            send_telegram_msg("❌ تم إلغاء الاستعادة.", chat_id=chat_id)
+                        elif chat_id in _pending_setdomain_chats:
+                            _pending_setdomain_chats.discard(chat_id)
+                            send_telegram_msg("❌ تم إلغاء تعيين الدومين.", chat_id=chat_id)
+                        else:
+                            send_telegram_msg("مفيش عملية شغالة عشان تتلغي.", chat_id=chat_id)
+                        continue
+
+                    # --- نظام الخطوة بخطوة لإضافة مسلسل ---
+                    if chat_id in _addseries_states:
+                        state = _addseries_states[chat_id]
+                        if state["step"] == "name":
+                            state["name"] = text
+                            state["step"] = "url"
+                            send_telegram_msg(f"✅ اسم المسلسل: <b>{text}</b>\n\n2️⃣ <b>ابعت دلوقتي مسار المسلسل على لاروزا:</b>\n(مثال: /view-serie1.php?ser=123)", chat_id=chat_id)
+                        
+                        elif state["step"] == "url":
+                            state["url"] = text
+                            state["step"] = "id"
+                            send_telegram_msg(f"✅ المسار اتسجل.\n\n3️⃣ ممتاز، آخر خطوة: <b>ابعت الـ ID بتاع المسلسل في موقعك</b>\n(اكتب رقم بس، مثال: 50):", chat_id=chat_id)
+                        
+                        elif state["step"] == "id":
+                            try:
+                                s_id = int(text)
+                                s_name = state["name"]
+                                s_url = state["url"]
+                                
+                                TARGET_SERIES[s_name] = {"url": s_url, "db_id": s_id}
+                                save_target_series(TARGET_SERIES)
+                                
+                                send_telegram_msg(f"🎉 <b>تم إضافة المسلسل بنجاح!</b>\n\n🎬 <b>الاسم:</b> {s_name}\n🔗 <b>المسار:</b> {s_url}\n🆔 <b>الأي دي:</b> {s_id}\n\n<i>هيبدأ الفحص عليه من الدورة الجاية.</i>", chat_id=chat_id)
+                                del _addseries_states[chat_id]
+                            except ValueError:
+                                send_telegram_msg("❌ الأي دي لازم يكون <b>رقم صحيح فقط</b>! جرب تاني، ابعت الرقم:", chat_id=chat_id)
+                        continue
+
+
                     if text.startswith("/status"):
                         send_telegram_msg(build_status_message(), chat_id=chat_id)
 
@@ -435,31 +479,12 @@ def telegram_commands_listener():
                             _apply_restore(parts[1], chat_id)
                         else:
                             _pending_restore_chats.add(chat_id)
-                            send_telegram_msg("📩 أرسل كود JSON الآن لاستعادة النسخة الاحتياطية:", chat_id=chat_id)
+                            send_telegram_msg("📩 أرسل كود JSON الآن لاستعادة النسخة الاحتياطية\n(لإلغاء العملية ارسل /cancel):", chat_id=chat_id)
 
                     # --- أوامر التحكم في المسلسلات ---
                     elif text.startswith("/addseries"):
-                        # الصيغة المطلوبة: /addseries اسم المسلسل | مسار المسلسل | الأيدي
-                        parts = text.replace("/addseries", "").strip().split("|")
-                        if len(parts) >= 3:
-                            s_name = parts[0].strip()
-                            s_url = parts[1].strip()
-                            try:
-                                s_id = int(parts[2].strip())
-                                TARGET_SERIES[s_name] = {"url": s_url, "db_id": s_id}
-                                save_target_series(TARGET_SERIES)
-                                send_telegram_msg(f"✅ تم إضافة المسلسل بنجاح:\n🎬 {s_name}\n🔗 {s_url}\n🆔 {s_id}", chat_id=chat_id)
-                            except ValueError:
-                                send_telegram_msg("❌ الأي دي (ID) لازم يكون رقم صحيح!", chat_id=chat_id)
-                        else:
-                            send_telegram_msg(
-                                "⚠️ خطأ في الصيغة!\n"
-                                "استخدم العلامة `|` للفصل بين البيانات.\n\n"
-                                "<code>/addseries اسم المسلسل | مسار المسلسل | الأي دي</code>\n\n"
-                                "<b>مثال:</b>\n"
-                                "<code>/addseries الكبير اوي | /view-serie1.php?ser=123 | 50</code>",
-                                chat_id=chat_id
-                            )
+                        _addseries_states[chat_id] = {"step": "name"}
+                        send_telegram_msg("📝 <b>إضافة مسلسل جديد للمراقبة</b>\n<i>(لو حابب تلغي العملية في أي وقت ابعت /cancel)</i>\n\n1️⃣ <b>ابعت اسم المسلسل دلوقتي:</b>", chat_id=chat_id)
 
                     elif text.startswith("/removeseries"):
                         s_name = text.replace("/removeseries", "").strip()
