@@ -14,7 +14,7 @@ from Crypto.Cipher import AES
 STATUS_FILE = os.path.join(os.path.dirname(__file__), "..", "bot_status.json")
 STATE_FILE  = os.path.join(os.path.dirname(__file__), "..", "bot_series_state.json")
 MANUAL_DOMAIN_FILE = os.path.join(os.path.dirname(__file__), "..", "manual_domain.json")
-TARGET_SERIES_FILE = os.path.join(os.path.dirname(__file__), "..", "target_series.json") # ملف حفظ المسلسلات الجديد
+TARGET_SERIES_FILE = os.path.join(os.path.dirname(__file__), "..", "target_series.json") 
 
 def save_status():
     try:
@@ -61,14 +61,8 @@ def load_target_series():
         with open(TARGET_SERIES_FILE, encoding="utf-8") as f:
             return json.load(f)
     except:
-        # القائمة الافتراضية لو الملف لسه متعملش
-        default_series = {
-            "حب ع ورق":              {"url": "/view-serie1.php?ser=25b4903c1",  "db_id": 237},
-            "قانون الطبيعة":         {"url": "/view-serie1.php?ser=38e112545",  "db_id": 260},
-            "بنات عمير":             {"url": "/view-serie1.php?ser=3956ee593",  "db_id": 261},
-            "بنج كلي":               {"url": "/view-serie1.php?ser=41a5651d4",  "db_id": 271, "domain_override": "https://larroza.baby"},
-            "أحمر ولا أبيض":         {"url": "/view-serie1.php?ser=6b87d5fd0",  "db_id": 272},
-        }
+        # قائمة فارغة لو الملف لسه متعملش (تم إزالة المسلسلات الافتراضية)
+        default_series = {}
         save_target_series(default_series)
         return default_series
 
