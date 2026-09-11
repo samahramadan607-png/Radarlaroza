@@ -461,29 +461,39 @@ def telegram_commands_listener():
     print("[*] مستمع أوامر التيليجرام جاهز. الأوامر: /status, /backup, /restore")
     while True:
         try:
-            params = {"timeout": 30, "allowed_updates": ["message"]}
+            params = {"timeout": 30}
             if offset:
                 params["offset"] = offset
+            
             resp = requests.get(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
                 params=params,
                 timeout=35
             )
             data = resp.json()
+            
+            if not data.get("ok"):
+                print(f"[-] خطأ من API تيليجرام: {data}")
+                time.sleep(5)
+                continue
+                
             if data.get("ok"):
                 for update in data.get("result", []):
                     offset = update["update_id"] + 1
                     msg = update.get("message", {})
-                    text = msg.get("text", "").strip()
+                    
+                    text = msg.get("text", "")
+                    if not isinstance(text, str) or not text.strip():
+                        continue
+                        
+                    text = text.strip()
                     chat_id = msg.get("chat", {}).get("id")
 
-                    if not text: continue
-
-                    if text == "/status":
+                    if text.startswith("/status"):
                         print(f"[*] استُقبل أمر /status من {chat_id}")
                         send_telegram_msg(build_status_message(), chat_id=chat_id)
 
-                    elif text == "/backup":
+                    elif text.startswith("/backup"):
                         print(f"[*] استُقبل أمر /backup من {chat_id}")
                         try:
                             state = load_series_state()
@@ -491,7 +501,6 @@ def telegram_commands_listener():
                                 send_telegram_msg("⚠️ لا يوجد بيانات حالية لعمل نسخة احتياطية.", chat_id=chat_id)
                             else:
                                 json_str = json.dumps(state, indent=2, ensure_ascii=False)
-                                # إذا كان النص صغيرا نرسله كرسالة ليسهل نسخه
                                 if len(json_str) < 4000:
                                     send_telegram_msg(f"📦 <b>النسخة الاحتياطية:</b>\n<i>انسخ الكود بالأسفل واستخدمه مع أمر /restore وقت الحاجة.</i>\n\n<pre>{escape(json_str)}</pre>", chat_id=chat_id)
                                 else:
@@ -523,7 +532,7 @@ def telegram_commands_listener():
                             _pending_setdomain_chats.discard(chat_id)
                             _apply_manual_domain(parts[1], chat_id)
 
-                    elif text == "/cleardomain":
+                    elif text.startswith("/cleardomain"):
                         _pending_setdomain_chats.discard(chat_id)
                         clear_manual_domain()
                         print("[*] تم إلغاء الدومين اليدوي")
@@ -537,6 +546,7 @@ def telegram_commands_listener():
                         _pending_setdomain_chats.discard(chat_id)
                         _apply_manual_domain(text, chat_id)
         except Exception as e:
+            print(f"[-] خطأ غير متوقع في مستمع الأوامر: {e}")
             time.sleep(5)
 
 # ==========================================
