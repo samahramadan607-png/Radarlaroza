@@ -383,15 +383,14 @@ def _apply_restore(json_text, chat_id):
         send_telegram_msg(f"❌ فشل في الاستعادة! تأكد من كود الـ JSON.\nالخطأ: {e}", chat_id=chat_id)
 
 def get_last_ep_from_api(series_id):
+    global api_session # تم نقلها إلى السطر الأول في الدالة لتجنب الانهيار (SyntaxError)
     try:
         req_api = api_session.post(
             YOUR_API_URL,
             data={"secret_key": SECRET_KEY, "action": "get_latest", "series_id": series_id},
             timeout=15,
         )
-        # محاولة تخطي الحماية لو ظهرت
         if "aes.js" in req_api.text or "cookie" in req_api.text:
-            global api_session
             api_session = get_infinity_session(YOUR_API_URL)
             req_api = api_session.post(
                 YOUR_API_URL,
