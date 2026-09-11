@@ -55,13 +55,11 @@ def save_series_state(state):
             json.dump(state, f, ensure_ascii=False, indent=2)
     except: pass
 
-# --- نظام المسلسلات الديناميكي (من ملف JSON) ---
 def load_target_series():
     try:
         with open(TARGET_SERIES_FILE, encoding="utf-8") as f:
             return json.load(f)
     except:
-        # قائمة فارغة لو الملف لسه متعملش (تم إزالة المسلسلات الافتراضية)
         default_series = {}
         save_target_series(default_series)
         return default_series
@@ -78,7 +76,7 @@ TARGET_SERIES = load_target_series()
 # ==========================================
 # 1. الإعدادات
 # ==========================================
-YOUR_API_URL = "https://arabfleex.xo.je/api.php" 
+YOUR_API_URL = "https://arabfleex.live/api.php" 
 SECRET_KEY = "ArabFleex_2024_SecRet"
 TELEGRAM_TOKEN = "8692766022:AAEsjS3IrZ3nafTa8WsRu70oKQ2lrsb5tkk"
 TELEGRAM_CHAT_ID = "1013251619" 
@@ -360,7 +358,7 @@ def build_status_message():
 
 _pending_setdomain_chats = set()
 _pending_restore_chats = set()
-_addseries_states = {}  # قاموس لحفظ حالة إضافة المسلسل خطوة بخطوة
+_addseries_states = {}  
 
 def _apply_manual_domain(new_domain, chat_id):
     new_domain = new_domain.strip().rstrip("/")
@@ -384,13 +382,34 @@ def _apply_restore(json_text, chat_id):
         print(f"[-] فشل الاستعادة: {e}")
         send_telegram_msg(f"❌ فشل في الاستعادة! تأكد من كود الـ JSON.\nالخطأ: {e}", chat_id=chat_id)
 
+def get_last_ep_from_api(series_id):
+    try:
+        req_api = api_session.post(
+            YOUR_API_URL,
+            data={"secret_key": SECRET_KEY, "action": "get_latest", "series_id": series_id},
+            timeout=15,
+        )
+        # محاولة تخطي الحماية لو ظهرت
+        if "aes.js" in req_api.text or "cookie" in req_api.text:
+            global api_session
+            api_session = get_infinity_session(YOUR_API_URL)
+            req_api = api_session.post(
+                YOUR_API_URL,
+                data={"secret_key": SECRET_KEY, "action": "get_latest", "series_id": series_id},
+                timeout=15,
+            )
+        api_data = json.loads(req_api.text.strip())
+        return api_data.get('last_ep', 0), api_data.get('last_link', '')
+    except Exception as e:
+        print(f"[-] فشل جلب آخر حلقة من الـ API للمسلسل {series_id}: {e}")
+        return 0, ''
+
 def telegram_commands_listener():
     global TARGET_SERIES
     offset = None
     print("[*] مستمع أوامر التيليجرام جاهز.")
     while True:
         try:
-            # إزالة allowed_updates لمنع خطأ 400 Bad Request
             params = {"timeout": 30}
             if offset: params["offset"] = offset
             
@@ -449,7 +468,28 @@ def telegram_commands_listener():
                                 TARGET_SERIES[s_name] = {"url": s_url, "db_id": s_id}
                                 save_target_series(TARGET_SERIES)
                                 
-                                send_telegram_msg(f"🎉 <b>تم إضافة المسلسل بنجاح!</b>\n\n🎬 <b>الاسم:</b> {s_name}\n🔗 <b>المسار:</b> {s_url}\n🆔 <b>الأي دي:</b> {s_id}\n\n<i>هيبدأ الفحص عليه من الدورة الجاية.</i>", chat_id=chat_id)
+                                # -- جلب آخر حلقة من الـ API وتخزينها محلياً --
+                                send_telegram_msg("⏳ جاري الاتصال بموقعك لمعرفة آخر حلقة مرفوعة...", chat_id=chat_id)
+                                last_ep, last_link = get_last_ep_from_api(s_id)
+                                
+                                series_state = load_series_state()
+                                series_state[str(s_id)] = {
+                                    "last_ep": last_ep,
+                                    "last_watch_link": last_link,
+                                    "seen_fps": [],
+                                    "last_vid": None
+                                }
+                                save_series_state(series_state)
+
+                                success_msg = (
+                                    f"🎉 <b>تم إضافة المسلسل بنجاح!</b>\n\n"
+                                    f"🎬 <b>الاسم:</b> {s_name}\n"
+                                    f"🔗 <b>المسار:</b> {s_url}\n"
+                                    f"🆔 <b>الأي دي:</b> {s_id}\n\n"
+                                    f"📊 <b>آخر حلقة في موقعك:</b> {last_ep if last_ep > 0 else 'لا يوجد حلقات (مسلسل جديد)'}\n\n"
+                                    f"<i>هيبدأ المراقبة من بعد الحلقة دي فوراً.</i>"
+                                )
+                                send_telegram_msg(success_msg, chat_id=chat_id)
                                 del _addseries_states[chat_id]
                             except ValueError:
                                 send_telegram_msg("❌ الأي دي لازم يكون <b>رقم صحيح فقط</b>! جرب تاني، ابعت الرقم:", chat_id=chat_id)
@@ -466,7 +506,7 @@ def telegram_commands_listener():
                             else:
                                 json_str = json.dumps(state, indent=2, ensure_ascii=False)
                                 if len(json_str) < 4000:
-                                    send_telegram_msg(f"📦 <b>النسخة الاحتياطية:</b>\n<pre>{escape(json_str)}</pre>", chat_id=chat_id)
+                                    send_telegram_msg(f"📦 <b>النسخة الاحتياطية (الحالة المحلية):</b>\n<pre>{escape(json_str)}</pre>", chat_id=chat_id)
                                 else:
                                     with open(STATE_FILE, 'rb') as f:
                                         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument", data={"chat_id": chat_id, "caption": "📦 ملف النسخة الاحتياطية"}, files={"document": f}, timeout=15)
@@ -491,9 +531,17 @@ def telegram_commands_listener():
                         if not s_name:
                             send_telegram_msg("⚠️ اكتب اسم المسلسل بعد الأمر.\nمثال:\n<code>/removeseries حب ع ورق</code>", chat_id=chat_id)
                         elif s_name in TARGET_SERIES:
+                            db_id = TARGET_SERIES[s_name]['db_id']
                             del TARGET_SERIES[s_name]
                             save_target_series(TARGET_SERIES)
-                            send_telegram_msg(f"🗑 تم حذف المسلسل: <b>{s_name}</b>", chat_id=chat_id)
+                            
+                            # تنظيف الذاكرة الخاصة بيه برضه
+                            state = load_series_state()
+                            if str(db_id) in state:
+                                del state[str(db_id)]
+                                save_series_state(state)
+
+                            send_telegram_msg(f"🗑 تم حذف المسلسل: <b>{s_name}</b> وإزالة بياناته من الذاكرة.", chat_id=chat_id)
                         else:
                             send_telegram_msg(f"❌ المسلسل ( {s_name} ) مش موجود في القائمة.", chat_id=chat_id)
 
@@ -502,8 +550,10 @@ def telegram_commands_listener():
                             send_telegram_msg("📂 القائمة فاضية مفيش مسلسلات بتراقبها حالياً.", chat_id=chat_id)
                         else:
                             msg = "📋 <b>قائمة المسلسلات الحالية:</b>\n\n"
+                            state = load_series_state()
                             for k, v in TARGET_SERIES.items():
-                                msg += f"• <b>{k}</b> (ID: {v['db_id']})\n"
+                                ep_info = state.get(str(v['db_id']), {}).get('last_ep', '?')
+                                msg += f"• <b>{k}</b> (ID: {v['db_id']}) - آخر حلقة مسجلة: {ep_info}\n"
                             send_telegram_msg(msg, chat_id=chat_id)
 
                     # --- أوامر التحكم في الدومين ---
@@ -698,12 +748,12 @@ def run_bot():
     series_state = load_series_state()
     print(f"\n=== الفحص الآن باستخدام الدومين: {current_domain} ===")
 
-    # بنستخدم copy من القاموس list(TARGET_SERIES.items()) عشان لو حذفت/ضفت مسلسل ميحصلش خطأ أثناء التكرار
     for series_name, series_info in list(TARGET_SERIES.items()):
         db_id = series_info['db_id']
         state_key = str(db_id)
         series_domain = resolve_series_domain(series_name, series_info, current_domain)
 
+        # الاعتماد الكلي على الذاكرة المحلية (توفير Hits)
         stored_data = series_state.get(state_key, {})
         last_ep = stored_data.get('last_ep', 0)
         current_last_link = stored_data.get('last_watch_link', "")
