@@ -10,6 +10,10 @@ import os
 from datetime import datetime
 from html import escape
 from Crypto.Cipher import AES
+import urllib3
+
+# إيقاف تحذيرات شهادات SSL غير الآمنة حتى لا تملأ سجلات Railway
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 STATUS_FILE = os.path.join(os.path.dirname(__file__), "..", "bot_status.json")
 STATE_FILE  = os.path.join(os.path.dirname(__file__), "..", "bot_series_state.json")
@@ -172,7 +176,7 @@ def detect_active_domain(site_label, known_domains, exclude_domains, content_key
 
     def try_domain(domain):
         try:
-            r = requests.get(domain, headers=HEADERS, timeout=10, allow_redirects=True)
+            r = requests.get(domain, headers=HEADERS, timeout=10, allow_redirects=True, verify=False)
             if r.status_code != 200: return None
             final = f"{urlparse(r.url).scheme}://{urlparse(r.url).netloc}"
             if any(ex in final for ex in exclude_domains): return None
@@ -201,7 +205,7 @@ def detect_active_domain(site_label, known_domains, exclude_domains, content_key
     print(f"[*] جاري البحث في DuckDuckGo عن دومين {site_label} الحالي...")
     for query in search_queries:
         try:
-            req = requests.post("https://lite.duckduckgo.com/lite/", headers=HEADERS, data={"q": query}, timeout=15)
+            req = requests.post("https://lite.duckduckgo.com/lite/", headers=HEADERS, data={"q": query}, timeout=15, verify=False)
             soup = BeautifulSoup(req.text, 'html.parser')
             for a in soup.find_all('a', href=True):
                 href = a.get('href', '')
@@ -241,6 +245,7 @@ def get_current_laroza_domain():
 def get_infinity_session(url):
     session = requests.Session()
     session.headers.update(HEADERS)
+    session.verify = False  # تجاهل فحص شهادة الـ SSL لموقعك
     try:
         res = session.get(url, timeout=15)
         if "toNumbers" in res.text and "slowAES.decrypt" in res.text:
@@ -304,6 +309,7 @@ def get_full_url(link, current_domain):
 def fetch_page(url, max_hops=8):
     session = requests.Session()
     session.headers.update(HEADERS)
+    session.verify = False  # تجاهل فحص شهادة الـ SSL للمواقع
     for _ in range(max_hops):
         try:
             res = session.get(url, timeout=15, allow_redirects=True)
@@ -615,7 +621,7 @@ def extract_servers(episode_url, current_domain):
         vid = vid_match.group(1)
 
         play_url = f"{current_domain}/play.php?vid={vid}"
-        req_play = requests.get(play_url, headers=HEADERS, timeout=15)
+        req_play = requests.get(play_url, headers=HEADERS, timeout=15, verify=False)
         soup_play = BeautifulSoup(req_play.text, 'html.parser')
         site_netloc = urlparse(current_domain).netloc.lower()
         known_laroza_hosts = {urlparse(domain).netloc.lower() for domain in LAROZA_KNOWN_DOMAINS}
@@ -645,7 +651,7 @@ def extract_servers(episode_url, current_domain):
             for i in range(4): data["watch"][i] = watch_servers[i] if i < len(watch_servers) else watch_servers[-1]
 
         dl_url = f"{current_domain}/download.php?vid={vid}"
-        req_dl = requests.get(dl_url, headers=HEADERS, timeout=15)
+        req_dl = requests.get(dl_url, headers=HEADERS, timeout=15, verify=False)
         soup_dl = BeautifulSoup(req_dl.text, 'html.parser')
 
         download_links = []
