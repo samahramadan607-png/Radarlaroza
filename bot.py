@@ -295,6 +295,10 @@ def save_notification_checkpoint(series_state, state_key, episode_number, video_
 
 def get_full_url(link, current_domain):
     if not link: return ""
+    # حل جذري: لو المستخدم حط اللينك كامل، هنقص الدومين وناخد المسار بس
+    if link.startswith('http'):
+        parsed = urlparse(link)
+        link = parsed.path + ("?" + parsed.query if parsed.query else "")
     return f"{current_domain}/{link}" if not link.startswith('/') else f"{current_domain}{link}"
 
 def fetch_page(url, max_hops=8):
@@ -440,30 +444,22 @@ def telegram_commands_listener():
 
                     if text == "/cancel":
                         if chat_id in _addseries_states:
-                            del _addseries_states[chat_id]
-                            send_telegram_msg("❌ تم إلغاء عملية إضافة المسلسل.", chat_id=chat_id)
-                        elif chat_id in _pending_restore_chats:
-                            _pending_restore_chats.discard(chat_id)
-                            send_telegram_msg("❌ تم إلغاء الاستعادة.", chat_id=chat_id)
-                        elif chat_id in _pending_setdomain_chats:
-                            _pending_setdomain_chats.discard(chat_id)
-                            send_telegram_msg("❌ تم إلغاء تعيين الدومين.", chat_id=chat_id)
-                        else:
-                            send_telegram_msg("مفيش عملية شغالة عشان تتلغي.", chat_id=chat_id)
-                        continue
-
-                    # --- نظام الخطوة بخطوة لإضافة مسلسل ---
-                    if chat_id in _addseries_states:
-                        state = _addseries_states[chat_id]
-                        if state["step"] == "name":
+                        elif state["step"] == "name":
                             state["name"] = text
                             state["step"] = "url"
                             send_telegram_msg(f"✅ اسم المسلسل: <b>{text}</b>\n\n2️⃣ <b>ابعت دلوقتي مسار المسلسل على لاروزا:</b>\n(مثال: /view-serie1.php?ser=123)", chat_id=chat_id)
                         
                         elif state["step"] == "url":
-                            state["url"] = text
+                            text_url = text.strip()
+                            # تنظيف اللينك أوتوماتيك لو المستخدم بعته كامل
+                            if text_url.startswith("http"):
+                                try:
+                                    parsed_url = urlparse(text_url)
+                                    text_url = parsed_url.path + ("?" + parsed_url.query if parsed_url.query else "")
+                                except: pass
+                            state["url"] = text_url
                             state["step"] = "id"
-                            send_telegram_msg(f"✅ المسار اتسجل.\n\n3️⃣ ممتاز، آخر خطوة: <b>ابعت الـ ID بتاع المسلسل في موقعك</b>\n(اكتب رقم بس، مثال: 50):", chat_id=chat_id)
+                            send_telegram_msg(f"✅ المسار اتسجل: <b>{text_url}</b>\n\n3️⃣ ممتاز، آخر خطوة: <b>ابعت الـ ID بتاع المسلسل في موقعك</b>\n(اكتب رقم بس، مثال: 50):", chat_id=chat_id)
                         
                         elif state["step"] == "id":
                             try:
@@ -487,12 +483,20 @@ def telegram_commands_listener():
                                 }
                                 save_series_state(series_state)
 
+                                # --- تحديث الحالة فوراً عشان تظهر للمستخدم بدون انتظار ---
+                                bot_status["series_status"][s_name] = {
+                                    "last_ep": last_ep, 
+                                    "status": "⏳ في انتظار بدء دورة الفحص القادمة..."
+                                }
+
+                                ep_text = f"{last_ep}" if last_ep > 0 else "0 (مسلسل جديد - سيبدأ البحث عن الحلقة 1)"
+
                                 success_msg = (
                                     f"🎉 <b>تم إضافة المسلسل بنجاح!</b>\n\n"
                                     f"🎬 <b>الاسم:</b> {s_name}\n"
                                     f"🔗 <b>المسار:</b> {s_url}\n"
                                     f"🆔 <b>الأي دي:</b> {s_id}\n\n"
-                                    f"📊 <b>آخر حلقة في موقعك:</b> {last_ep if last_ep > 0 else 'لا يوجد حلقات (مسلسل جديد)'}\n\n"
+                                    f"📊 <b>آخر حلقة في موقعك:</b> {ep_text}\n\n"
                                     f"<i>هيبدأ المراقبة من بعد الحلقة دي فوراً.</i>"
                                 )
                                 send_telegram_msg(success_msg, chat_id=chat_id)
@@ -937,8 +941,12 @@ if __name__ == "__main__":
     listener_thread.start()
     send_telegram_msg("🚀 <b>سيرفر المراقبة الذكي اشتغل!</b>\n\n- استخدم /addseries لإضافة مسلسل\n- استخدم /removeseries للحذف\n- استخدم /listseries لعرض القائمة")
     while True:
-        try: run_bot()
+        try: 
+            run_bot()
         except Exception as e:
-            print(f"[-] خطأ أوقف دورة الفحص الحالية: {e}")
+            err_msg = f"[-] خطأ أوقف دورة الفحص الحالية: {e}"
+            print(err_msg)
+            # إنذار مبكر يتبعتلك على التليجرام لو حصل أي كراش
+            send_telegram_msg(f"⚠️ <b>تنبيه من النظام:</b> حصل خطأ مفاجئ ووقف دورة الفحص الحالية:\n<code>{e}</code>\nالبوت هيكمل دورته الجاية عادي متقلقش.")
         print("\n[تم الفحص. سيتم الفحص مجدداً بعد 5 دقائق...]")
         time.sleep(300)
