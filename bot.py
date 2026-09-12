@@ -80,7 +80,8 @@ YOUR_API_URL = "https://arabfleex.live/api.php"
 SECRET_KEY = "ArabFleex_2024_SecRet"
 TELEGRAM_TOKEN = "8692766022:AAEsjS3IrZ3nafTa8WsRu70oKQ2lrsb5tkk"
 TELEGRAM_CHAT_ID = "1013251619" 
-NOTIFY_ONLY = True  
+# تم تغيير هذه القيمة إلى False لكي يقوم البوت بإضافة الحلقات لقاعدة البيانات فعلياً
+NOTIFY_ONLY = False  
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
@@ -283,7 +284,7 @@ def send_episode_notification(series_name, episode_number, servers):
     if download_links:
         lines.extend(["", "<b>روابط التحميل:</b>", *[f"<code>{escape(link)}</code>" for link in download_links]])
 
-    lines.extend(["", "<i>إشعار فقط — لم تتم إضافة الحلقة لقاعدة البيانات.</i>"])
+    lines.extend(["", "<i>تمت إضافة الحلقة لقاعدة البيانات بنجاح ✅</i>"])
     send_telegram_msg("\n".join(lines))
 
 def save_notification_checkpoint(series_state, state_key, episode_number, video_id, watch_links, seen_fps):
@@ -393,14 +394,22 @@ def get_last_ep_from_api(series_id):
             data={"secret_key": SECRET_KEY, "action": "get_latest", "series_id": series_id},
             timeout=15,
         )
-        if "aes.js" in req_api.text or "cookie" in req_api.text:
+        if "aes.js" in req_api.text or "cookie" in req_api.text or "toNumbers" in req_api.text:
+            print("[!] حماية InfinityFree مفعلة، محاولة تخطيها...")
             api_session = get_infinity_session(YOUR_API_URL)
             req_api = api_session.post(
                 YOUR_API_URL,
                 data={"secret_key": SECRET_KEY, "action": "get_latest", "series_id": series_id},
                 timeout=15,
             )
-        api_data = json.loads(req_api.text.strip())
+        
+        text_resp = req_api.text.strip()
+        # التأكد أن الرد عبارة عن JSON صالح وليس صفحة HTML أو خطأ من الاستضافة
+        if not text_resp.startswith('{'):
+            print(f"[-] الـ API رجع بيانات غير متوقعة (ربما بلوك من الاستضافة): {text_resp[:100]}")
+            return 0, ''
+            
+        api_data = json.loads(text_resp)
         
         last_ep_val = api_data.get('last_ep', 0)
         last_ep_val = int(last_ep_val) if last_ep_val is not None else 0
@@ -492,7 +501,7 @@ def telegram_commands_listener():
                                     "status": "⏳ في انتظار بدء دورة الفحص القادمة..."
                                 }
 
-                                ep_text = f"{last_ep}" if last_ep > 0 else "0 (مسلسل جديد - سيبدأ البحث عن الحلقة 1)"
+                                ep_text = f"{last_ep}" if last_ep > 0 else "0 (سيتم البحث عن الحلقات الجديدة)"
 
                                 success_msg = (
                                     f"🎉 <b>تم إضافة المسلسل بنجاح!</b>\n\n"
@@ -663,41 +672,12 @@ def find_next_ep_from_vid(vid, current_domain, min_ep=0):
                 ep_m = re.search(r'(\d+)', text)
                 if ep_m and int(ep_m.group(1)) > min_ep:
                     return {'vid': vid_m.group(1), 'num': int(ep_m.group(1)), 'url': get_full_url(href, current_domain)}
-            ep_m = re.search(r'^(\d+)\s*حلق[ةه]$|^حلق[ةه]\s*(\d+)$', text)
+            # تحسين الـ Regex ليلتقط الأرقام بشكل أدق
+            ep_m = re.search(r'(\d+)\s*حلق[ةه]|(?:ال)?حلق[ةه]\s*(\d+)|^(\d+)$', text)
             if ep_m:
-                ep_num = int(ep_m.group(1) or ep_m.group(2))
+                ep_num = int(ep_m.group(1) or ep_m.group(2) or ep_m.group(3))
                 if ep_num > min_ep: candidates.append({'vid': vid_m.group(1), 'num': ep_num, 'url': get_full_url(href, current_domain)})
         if candidates: return min(candidates, key=lambda x: x['num'])
-    except: pass
-    return None
-
-def find_vid_for_ep(series_info, last_ep, current_domain):
-    season_keyword = series_info.get('season_keyword')
-    series_url = get_full_url(series_info['url'], current_domain)
-    try:
-        res = fetch_page(series_url)
-        if not res: return None
-        soup = BeautifulSoup(res.text, 'html.parser')
-        seen_vids = set()
-        all_eps = []
-        for link in soup.find_all('a'):
-            href = link.get('href', '')
-            text = link.text.strip()
-            if not href or 'video' not in href.lower(): continue
-            if season_keyword and season_keyword not in text: continue
-            vid_m = re.search(r'vid=([a-zA-Z0-9]+)', href)
-            if not vid_m: continue
-            vid_id = vid_m.group(1)
-            if vid_id in seen_vids: continue
-            ep_m = re.search(r'(\d+)\s*حلق[ةه]|(?:ال)?حلق[ةه]\s*(\d+)', text)
-            if ep_m:
-                ep_num = int(ep_m.group(1) or ep_m.group(2))
-                seen_vids.add(vid_id)
-                if last_ep == 0: all_eps.append((ep_num, vid_id))
-                elif ep_num == last_ep: return vid_id
-        if last_ep == 0 and all_eps:
-            all_eps.sort(key=lambda x: x[0])
-            return all_eps[0][1]
     except: pass
     return None
 
@@ -719,9 +699,9 @@ def find_all_eps_on_page(series_info, current_domain):
             if not vid_m: continue
             vid_id = vid_m.group(1)
             if vid_id in seen_vids: continue
-            ep_m = re.search(r'(\d+)\s*حلق[ةه]|(?:ال)?حلق[ةه]\s*(\d+)', text)
+            ep_m = re.search(r'(\d+)\s*حلق[ةه]|(?:ال)?حلق[ةه]\s*(\d+)|^(\d+)$', text)
             if ep_m:
-                ep_num = int(ep_m.group(1) or ep_m.group(2))
+                ep_num = int(ep_m.group(1) or ep_m.group(2) or ep_m.group(3))
                 results.append({'vid': vid_id, 'num': ep_num, 'url': get_full_url(href, current_domain)})
                 seen_vids.add(vid_id)
         results.sort(key=lambda x: x['num'])
@@ -770,7 +750,7 @@ def run_bot():
         current_last_link = stored_data.get('last_watch_link', "") or ""
 
         bot_status["series_status"][series_name] = {"last_ep": last_ep, "status": "جاري الفحص..."}
-        print(f"\n[*] {series_name} | آخر حلقة محلياً: {last_ep} | جاري البحث...")
+        print(f"\n[*] {series_name} | آخر حلقة محلياً: {last_ep} | جاري البحث عن حلقات أكبر من {last_ep}...")
 
         current_vid = stored_data.get('last_vid')
         stored_ep   = stored_data.get('last_ep', -1)
@@ -786,150 +766,76 @@ def run_bot():
             last_ep = notified_ep
             current_last_link = stored_data.get('last_watch_link', current_last_link) or ""
 
-        if last_ep == 0:
-            print(f"  [★] مسلسل جديد {series_name} — جاري البحث في الصفحة...")
-            all_page_eps = find_all_eps_on_page(series_info, series_domain)
-            if not all_page_eps:
-                bot_status["series_status"][series_name] = {"last_ep": 0, "status": "⏳ لا حلقات بعد"}
-                continue
-
-            if NOTIFY_ONLY:
-                latest_item = all_page_eps[-1]
-                series_state[state_key] = {
-                    "last_vid": latest_item["vid"], "last_ep": latest_item["num"], "notified_ep": latest_item["num"],
-                    "last_watch_link": "", "seen_fps": [],
-                }
-                save_series_state(series_state)
-                bot_status["series_status"][series_name] = {"last_ep": latest_item['num'], "status": f"📌 تم ضبط نقطة البداية عند ح{latest_item['num']}"}
-                continue
-
-            added_any = False
-            total_eps = len(all_page_eps)
-            for idx, ep_item in enumerate(all_page_eps):
-                ep_num, ep_vid, ep_url = ep_item['num'], ep_item['vid'], ep_item['url']
-                servers = extract_servers(ep_url, series_domain)
-                w, d = servers["watch"], servers["download"]
-                all_w, all_dl = [s for s in w if s], [s for s in d if s]
-
-                if not w[0] or not any(is_real_server(s) for s in all_w): continue
-                if is_duplicate_video(all_w, seen_fps)[0]: continue
-                if (idx == total_eps - 1) and not any(is_real_server(s) for s in all_dl): break
-
-                insert_payload = {
-                    "secret_key": SECRET_KEY, "action": "insert", "series_id": db_id, "title": f"الحلقة {ep_num}",
-                    "episode_number": ep_num, "watch_link": w[0], "watch_link_2": w[1], "watch_link_3": w[2], "watch_link_4": w[3],
-                    "download_link": d[0], "download_link_2": d[1],
-                }
-                try:
-                    ins = api_session.post(YOUR_API_URL, data=insert_payload, timeout=20)
-                    if "aes.js" in ins.text or "cookie" in ins.text:
-                        api_session = get_infinity_session(YOUR_API_URL)
-                        ins = api_session.post(YOUR_API_URL, data=insert_payload, timeout=20)
-
-                    if "INSERTED" in ins.text:
-                        bot_status["total_added"] += 1
-                        last_ep = ep_num
-                        current_vid = ep_vid
-                        for lnk in all_w:
-                            fp = extract_video_fingerprint(lnk)
-                            if fp: seen_fps.add(fp)
-                        series_state[state_key] = {'last_vid': current_vid, 'last_ep': last_ep, 'seen_fps': list(seen_fps), 'last_watch_link': w[0]}
-                        save_series_state(series_state)
-                        send_telegram_msg(f"🚀 <b>حلقة جديدة نزلت!</b>\n\n🎬 <b>المسلسل:</b> \u200f{series_name}\n📺 <b>الحلقة:</b> {ep_num}\n\n<i>تم الإضافة بنجاح ✅</i>")
-                        added_any = True
-                        time.sleep(2)
-                except: pass
-
-            bot_status["series_status"][series_name] = {"last_ep": last_ep, "status": f"✅ أُضيفت {last_ep} حلقة" if added_any else "⏳ لا حلقات جاهزة بعد"}
+        # جلب جميع الحلقات المتوفرة في صفحة المسلسل لتخطي مشكلة الحلقة 64 المفقودة
+        all_page_eps = find_all_eps_on_page(series_info, series_domain)
+        
+        if not all_page_eps:
+            bot_status["series_status"][series_name] = {"last_ep": last_ep, "status": "⏳ لا توجد حلقات في الصفحة"}
             continue
 
-        if not current_vid:
-            current_vid = find_vid_for_ep(series_info, last_ep, series_domain)
-            if current_vid:
-                series_state[state_key]['last_vid'] = current_vid
-                save_series_state(series_state)
-            else:
-                bot_status["series_status"][series_name] = {"last_ep": last_ep, "status": "لم يتم تحديد الحلقة"}
+        # تحديد الحلقات الجديدة التي رقمها أكبر من آخر حلقة مسجلة لدينا (مثلا أكبر من 64)
+        new_eps_to_add = [ep for ep in all_page_eps if ep['num'] > last_ep]
+
+        if not new_eps_to_add:
+            bot_status["series_status"][series_name] = {"last_ep": last_ep, "status": "لا جديد"}
+            continue
+
+        # يوجد حلقات جديدة! سنقوم بإضافتها واحدة تلو الأخرى
+        added_any = False
+        for ep_item in new_eps_to_add:
+            ep_num, ep_vid, ep_url = ep_item['num'], ep_item['vid'], ep_item['url']
+            
+            servers = extract_servers(ep_url, series_domain)
+            w, d = servers["watch"], servers["download"]
+            all_w, all_dl = [s for s in w if s], [s for s in d if s]
+
+            if not w[0] or not any(is_real_server(s) for s in all_w): continue
+            if is_duplicate_video(all_w, seen_fps)[0]: continue
+
+            if NOTIFY_ONLY:
+                send_episode_notification(series_name, ep_num, servers)
+                last_ep = ep_num
+                current_vid = ep_vid
+                for link in all_w:
+                    fp = extract_video_fingerprint(link)
+                    if fp: seen_fps.add(fp)
+                save_notification_checkpoint(series_state, state_key, last_ep, current_vid, all_w, seen_fps)
+                added_any = True
+                time.sleep(2)
                 continue
 
-        real_current_link = current_last_link
-        try:
-            for _ in range(10): 
-                candidate = find_next_ep_from_vid(current_vid, series_domain, min_ep=last_ep)
-                if not candidate:
-                    all_page_eps = find_all_eps_on_page(series_info, series_domain)
-                    next_on_page = [e for e in all_page_eps if e['num'] > last_ep]
-                    if next_on_page: candidate = min(next_on_page, key=lambda x: x['num'])
-                    else:
-                        bot_status["series_status"][series_name] = {"last_ep": last_ep, "status": "لا جديد"}
-                        break
+            # الإضافة لقاعدة البيانات
+            insert_payload = {
+                "secret_key": SECRET_KEY, "action": "insert", "series_id": db_id, "title": f"الحلقة {ep_num}",
+                "episode_number": ep_num, "watch_link": w[0], "watch_link_2": w[1], "watch_link_3": w[2], "watch_link_4": w[3],
+                "download_link": d[0], "download_link_2": d[1],
+            }
+            try:
+                ins = api_session.post(YOUR_API_URL, data=insert_payload, timeout=20)
+                if "aes.js" in ins.text or "cookie" in ins.text or "toNumbers" in ins.text:
+                    api_session = get_infinity_session(YOUR_API_URL)
+                    ins = api_session.post(YOUR_API_URL, data=insert_payload, timeout=20)
 
-                target_ep, target_vid, target_url = candidate['num'], candidate['vid'], candidate['url']
-                if target_ep <= last_ep or target_vid == current_vid:
-                    current_vid = target_vid
-                    continue
-
-                confirmation = find_next_ep_from_vid(target_vid, series_domain, min_ep=target_ep)
-                servers = extract_servers(target_url, series_domain)
-                new_watch_link = servers["watch"][0]
-
-                if not new_watch_link: break
-                all_watch = [s for s in servers["watch"] if s]
-                all_dl    = [s for s in servers["download"] if s]
-
-                if real_current_link and new_watch_link == real_current_link: break
-                if not any(is_real_server(s) for s in all_watch): break
-                if is_duplicate_video(all_watch, seen_fps)[0]: break
-                if NOTIFY_ONLY and not confirmation: break
-                if not NOTIFY_ONLY and not confirmation and not any(is_real_server(s) for s in all_dl): break
-
-                if NOTIFY_ONLY:
-                    send_episode_notification(series_name, target_ep, servers)
-                    last_ep = target_ep
-                    current_vid = target_vid
-                    real_current_link = new_watch_link
-                    for link in all_watch:
-                        fp = extract_video_fingerprint(link)
+                if "INSERTED" in ins.text:
+                    bot_status["total_added"] += 1
+                    last_ep = ep_num
+                    current_vid = ep_vid
+                    for lnk in all_w:
+                        fp = extract_video_fingerprint(lnk)
                         if fp: seen_fps.add(fp)
-                    save_notification_checkpoint(series_state, state_key, last_ep, current_vid, all_watch, seen_fps)
-                    if not confirmation: break
+                    series_state[state_key] = {'last_vid': current_vid, 'last_ep': last_ep, 'seen_fps': list(seen_fps), 'last_watch_link': w[0]}
+                    save_series_state(series_state)
+                    send_episode_notification(series_name, ep_num, servers)
+                    added_any = True
+                    print(f"  [+] تم إضافة الحلقة {ep_num} بنجاح!")
                     time.sleep(2)
-                    continue
+                else:
+                    print(f"  [-] فشل إضافة الحلقة {ep_num}. الرد من الموقع: {ins.text[:50]}")
+            except Exception as e:
+                print(f"  [-] خطأ اتصال اثناء الإضافة: {e}")
 
-                insert_payload = {
-                    "secret_key": SECRET_KEY, "action": "insert", "series_id": db_id, "title": f"الحلقة {target_ep}",
-                    "episode_number": target_ep, "watch_link": servers["watch"][0], "watch_link_2": servers["watch"][1],
-                    "watch_link_3": servers["watch"][2], "watch_link_4": servers["watch"][3],
-                    "download_link": servers["download"][0], "download_link_2": servers["download"][1],
-                }
-
-                try:
-                    insert_req = api_session.post(YOUR_API_URL, data=insert_payload, timeout=20)
-                    if "aes.js" in insert_req.text or "cookie" in insert_req.text:
-                        api_session = get_infinity_session(YOUR_API_URL)
-                        insert_req = api_session.post(YOUR_API_URL, data=insert_payload, timeout=20)
-
-                    if "INSERTED" in insert_req.text:
-                        bot_status["total_added"] += 1
-                        bot_status["series_status"][series_name] = {"last_ep": target_ep, "status": f"✅ أُضيفت الحلقة {target_ep}"}
-                        send_telegram_msg(f"🚀 <b>حلقة جديدة نزلت!</b>\n\n🎬 <b>المسلسل:</b> \u200f{series_name}\n📺 <b>الحلقة:</b> {target_ep}\n\n<i>تم الإضافة بنجاح ✅</i>")
-                        last_ep = target_ep
-                        current_last_link = new_watch_link
-                        real_current_link = new_watch_link
-                        current_vid = target_vid
-                        for lnk in all_watch:
-                            fp = extract_video_fingerprint(lnk)
-                            if fp: seen_fps.add(fp)
-                        series_state[state_key] = {'last_vid': current_vid, 'last_ep': last_ep, 'seen_fps': list(seen_fps), 'last_watch_link': current_last_link}
-                        save_series_state(series_state)
-                        if not confirmation: break
-                    else: break
-                except: break
-                time.sleep(2)
-        except Exception as e: 
-            bot_status["series_status"][series_name] = {"last_ep": "?", "status": "خطأ"}
-            print(f"[-] خطأ أثناء فحص المسلسل {series_name}: {e}")
-        time.sleep(5) 
+        bot_status["series_status"][series_name] = {"last_ep": last_ep, "status": f"✅ تم الوصول للحلقة {last_ep}" if added_any else "⏳ تم الفحص"}
+        time.sleep(3)
 
     bot_status["last_check"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     save_status()
