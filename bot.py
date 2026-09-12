@@ -378,16 +378,36 @@ def _apply_manual_domain(new_domain, chat_id):
     send_telegram_msg(f"✅ تم تحديد الدومين:\n<code>{new_domain}</code>\n\nهيتجرب فورًا كأولوية.\nلإلغائه: /cleardomain", chat_id=chat_id)
 
 def _apply_restore(json_text, chat_id):
+    global TARGET_SERIES
     try:
         new_data = json.loads(json_text)
         if not isinstance(new_data, dict): raise ValueError("البيانات يجب أن تكون JSON Object.")
-        current_state = load_series_state()
-        for key, val in new_data.items():
-            if key in current_state and isinstance(val, dict): current_state[key].update(val)
-            else: current_state[key] = val
-        save_series_state(current_state)
+        
+        # إذا كان الباك أب بالنظام الجديد الشامل (يحتوي على القائمة + الذاكرة)
+        if "target_series" in new_data or "series_state" in new_data:
+            if "target_series" in new_data:
+                current_targets = load_target_series()
+                for k, v in new_data["target_series"].items():
+                    current_targets[k] = v
+                save_target_series(current_targets)
+                TARGET_SERIES = current_targets
+            
+            if "series_state" in new_data:
+                current_state = load_series_state()
+                for key, val in new_data["series_state"].items():
+                    if key in current_state and isinstance(val, dict): current_state[key].update(val)
+                    else: current_state[key] = val
+                save_series_state(current_state)
+        else:
+            # لدعم الباك أب القديم الذي كان يحتوي على الذاكرة فقط
+            current_state = load_series_state()
+            for key, val in new_data.items():
+                if key in current_state and isinstance(val, dict): current_state[key].update(val)
+                else: current_state[key] = val
+            save_series_state(current_state)
+            
         print("[*] تم استعادة النسخة الاحتياطية بنجاح.")
-        send_telegram_msg("✅ تم استعادة وتحديث بيانات المسلسلات بنجاح!", chat_id=chat_id)
+        send_telegram_msg("✅ تم استعادة وتحديث بيانات المسلسلات (القائمة + الحلقات) بنجاح!", chat_id=chat_id)
     except Exception as e:
         print(f"[-] فشل الاستعادة: {e}")
         send_telegram_msg(f"❌ فشل في الاستعادة! تأكد من كود الـ JSON.\nالخطأ: {e}", chat_id=chat_id)
@@ -536,14 +556,27 @@ def telegram_commands_listener():
                     elif text.startswith("/backup"):
                         try:
                             state = load_series_state()
-                            if not state: send_telegram_msg("⚠️ لا يوجد بيانات حالية.", chat_id=chat_id)
+                            targets = load_target_series()
+                            
+                            # دمج القائمة مع الذاكرة في ملف واحد
+                            backup_data = {
+                                "target_series": targets,
+                                "series_state": state
+                            }
+                            
+                            if not state and not targets: 
+                                send_telegram_msg("⚠️ لا يوجد بيانات حالية لعمل نسخة احتياطية.", chat_id=chat_id)
                             else:
-                                json_str = json.dumps(state, indent=2, ensure_ascii=False)
+                                json_str = json.dumps(backup_data, indent=2, ensure_ascii=False)
                                 if len(json_str) < 4000:
-                                    send_telegram_msg(f"📦 <b>النسخة الاحتياطية (الحالة المحلية):</b>\n<pre>{escape(json_str)}</pre>", chat_id=chat_id)
+                                    send_telegram_msg(f"📦 <b>النسخة الاحتياطية الشاملة:</b>\n<pre>{escape(json_str)}</pre>", chat_id=chat_id)
                                 else:
-                                    with open(STATE_FILE, 'rb') as f:
-                                        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument", data={"chat_id": chat_id, "caption": "📦 ملف النسخة الاحتياطية"}, files={"document": f}, timeout=15)
+                                    # حفظه في ملف مستقل لتجنب حذف الملفات الأساسية
+                                    backup_file_path = os.path.join(os.path.dirname(__file__), "..", "full_backup.json")
+                                    with open(backup_file_path, 'w', encoding='utf-8') as bf:
+                                        bf.write(json_str)
+                                    with open(backup_file_path, 'rb') as f:
+                                        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument", data={"chat_id": chat_id, "caption": "📦 ملف النسخة الاحتياطية الشاملة (القائمة + الذاكرة)"}, files={"document": f}, timeout=15)
                         except Exception as e: send_telegram_msg(f"❌ خطأ: {e}", chat_id=chat_id)
 
                     elif text.startswith("/restore"):
