@@ -295,7 +295,6 @@ def save_notification_checkpoint(series_state, state_key, episode_number, video_
 
 def get_full_url(link, current_domain):
     if not link: return ""
-    # حل جذري: لو المستخدم حط اللينك كامل، هنقص الدومين وناخد المسار بس
     if link.startswith('http'):
         parsed = urlparse(link)
         link = parsed.path + ("?" + parsed.query if parsed.query else "")
@@ -387,7 +386,7 @@ def _apply_restore(json_text, chat_id):
         send_telegram_msg(f"❌ فشل في الاستعادة! تأكد من كود الـ JSON.\nالخطأ: {e}", chat_id=chat_id)
 
 def get_last_ep_from_api(series_id):
-    global api_session # تم نقلها إلى السطر الأول في الدالة لتجنب الانهيار (SyntaxError)
+    global api_session
     try:
         req_api = api_session.post(
             YOUR_API_URL,
@@ -403,7 +402,6 @@ def get_last_ep_from_api(series_id):
             )
         api_data = json.loads(req_api.text.strip())
         
-        # حماية إضافية لو الـ API رجّع null بدل 0
         last_ep_val = api_data.get('last_ep', 0)
         last_ep_val = int(last_ep_val) if last_ep_val is not None else 0
         last_link_val = api_data.get('last_link', '')
@@ -444,14 +442,21 @@ def telegram_commands_listener():
 
                     if text == "/cancel":
                         if chat_id in _addseries_states:
-                        elif state["step"] == "name":
+                            del _addseries_states[chat_id]
+                            send_telegram_msg("❌ تم إلغاء عملية إضافة المسلسل.", chat_id=chat_id)
+                        else:
+                            send_telegram_msg("⚠️ ليس هناك أي عملية جارية للإلغاء.", chat_id=chat_id)
+                        continue
+
+                    if chat_id in _addseries_states:
+                        state = _addseries_states[chat_id]
+                        if state["step"] == "name":
                             state["name"] = text
                             state["step"] = "url"
                             send_telegram_msg(f"✅ اسم المسلسل: <b>{text}</b>\n\n2️⃣ <b>ابعت دلوقتي مسار المسلسل على لاروزا:</b>\n(مثال: /view-serie1.php?ser=123)", chat_id=chat_id)
                         
                         elif state["step"] == "url":
                             text_url = text.strip()
-                            # تنظيف اللينك أوتوماتيك لو المستخدم بعته كامل
                             if text_url.startswith("http"):
                                 try:
                                     parsed_url = urlparse(text_url)
@@ -470,7 +475,6 @@ def telegram_commands_listener():
                                 TARGET_SERIES[s_name] = {"url": s_url, "db_id": s_id}
                                 save_target_series(TARGET_SERIES)
                                 
-                                # -- جلب آخر حلقة من الـ API وتخزينها محلياً --
                                 send_telegram_msg("⏳ جاري الاتصال بموقعك لمعرفة آخر حلقة مرفوعة...", chat_id=chat_id)
                                 last_ep, last_link = get_last_ep_from_api(s_id)
                                 
@@ -483,7 +487,6 @@ def telegram_commands_listener():
                                 }
                                 save_series_state(series_state)
 
-                                # --- تحديث الحالة فوراً عشان تظهر للمستخدم بدون انتظار ---
                                 bot_status["series_status"][s_name] = {
                                     "last_ep": last_ep, 
                                     "status": "⏳ في انتظار بدء دورة الفحص القادمة..."
@@ -504,7 +507,6 @@ def telegram_commands_listener():
                             except ValueError:
                                 send_telegram_msg("❌ الأي دي لازم يكون <b>رقم صحيح فقط</b>! جرب تاني، ابعت الرقم:", chat_id=chat_id)
                         continue
-
 
                     if text.startswith("/status"):
                         send_telegram_msg(build_status_message(), chat_id=chat_id)
@@ -531,7 +533,6 @@ def telegram_commands_listener():
                             _pending_restore_chats.add(chat_id)
                             send_telegram_msg("📩 أرسل كود JSON الآن لاستعادة النسخة الاحتياطية\n(لإلغاء العملية ارسل /cancel):", chat_id=chat_id)
 
-                    # --- أوامر التحكم في المسلسلات ---
                     elif text.startswith("/addseries"):
                         _addseries_states[chat_id] = {"step": "name"}
                         send_telegram_msg("📝 <b>إضافة مسلسل جديد للمراقبة</b>\n<i>(لو حابب تلغي العملية في أي وقت ابعت /cancel)</i>\n\n1️⃣ <b>ابعت اسم المسلسل دلوقتي:</b>", chat_id=chat_id)
@@ -545,7 +546,6 @@ def telegram_commands_listener():
                             del TARGET_SERIES[s_name]
                             save_target_series(TARGET_SERIES)
                             
-                            # تنظيف الذاكرة الخاصة بيه برضه
                             state = load_series_state()
                             if str(db_id) in state:
                                 del state[str(db_id)]
@@ -566,7 +566,6 @@ def telegram_commands_listener():
                                 msg += f"• <b>{k}</b> (ID: {v['db_id']}) - آخر حلقة مسجلة: {ep_info}\n"
                             send_telegram_msg(msg, chat_id=chat_id)
 
-                    # --- أوامر التحكم في الدومين ---
                     elif text.startswith("/setdomain"):
                         parts = text.split(maxsplit=1)
                         if len(parts) < 2 or not parts[1].strip():
@@ -764,10 +763,8 @@ def run_bot():
         state_key = str(db_id)
         series_domain = resolve_series_domain(series_name, series_info, current_domain)
 
-        # الاعتماد الكلي على الذاكرة المحلية (توفير Hits)
         stored_data = series_state.get(state_key, {})
         
-        # تنظيف البيانات لمنع الكراش لو القيمة null/None
         last_ep = stored_data.get('last_ep', 0)
         last_ep = int(last_ep) if last_ep is not None else 0
         current_last_link = stored_data.get('last_watch_link', "") or ""
@@ -929,7 +926,9 @@ def run_bot():
                     else: break
                 except: break
                 time.sleep(2)
-        except: bot_status["series_status"][series_name] = {"last_ep": "?", "status": "خطأ"}
+        except Exception as e: 
+            bot_status["series_status"][series_name] = {"last_ep": "?", "status": "خطأ"}
+            print(f"[-] خطأ أثناء فحص المسلسل {series_name}: {e}")
         time.sleep(5) 
 
     bot_status["last_check"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -946,7 +945,6 @@ if __name__ == "__main__":
         except Exception as e:
             err_msg = f"[-] خطأ أوقف دورة الفحص الحالية: {e}"
             print(err_msg)
-            # إنذار مبكر يتبعتلك على التليجرام لو حصل أي كراش
             send_telegram_msg(f"⚠️ <b>تنبيه من النظام:</b> حصل خطأ مفاجئ ووقف دورة الفحص الحالية:\n<code>{e}</code>\nالبوت هيكمل دورته الجاية عادي متقلقش.")
         print("\n[تم الفحص. سيتم الفحص مجدداً بعد 5 دقائق...]")
         time.sleep(300)
