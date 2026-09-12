@@ -80,7 +80,7 @@ YOUR_API_URL = "https://arabfleex.live/api.php"
 SECRET_KEY = "ArabFleex_2024_SecRet"
 TELEGRAM_TOKEN = "8692766022:AAEsjS3IrZ3nafTa8WsRu70oKQ2lrsb5tkk"
 TELEGRAM_CHAT_ID = "1013251619" 
-# تم تغيير هذه القيمة إلى False لكي يقوم البوت بإضافة الحلقات لقاعدة البيانات فعلياً
+# تم التعديل إلى False لتفعيل الإضافة لقاعدة البيانات
 NOTIFY_ONLY = False  
 
 HEADERS = {
@@ -386,7 +386,7 @@ def _apply_restore(json_text, chat_id):
         print(f"[-] فشل الاستعادة: {e}")
         send_telegram_msg(f"❌ فشل في الاستعادة! تأكد من كود الـ JSON.\nالخطأ: {e}", chat_id=chat_id)
 
-def get_last_ep_from_api(series_id):
+def get_last_ep_from_api(series_id, chat_id=None):
     global api_session
     try:
         req_api = api_session.post(
@@ -404,21 +404,28 @@ def get_last_ep_from_api(series_id):
             )
         
         text_resp = req_api.text.strip()
-        # التأكد أن الرد عبارة عن JSON صالح وليس صفحة HTML أو خطأ من الاستضافة
-        if not text_resp.startswith('{'):
-            print(f"[-] الـ API رجع بيانات غير متوقعة (ربما بلوك من الاستضافة): {text_resp[:100]}")
-            return 0, ''
+        
+        # استخدام Regex لاستخراج JSON فقط لتجاهل أي أكواد مخفية تضيفها استضافة InfinityFree
+        json_match = re.search(r'\{.*\}', text_resp, re.DOTALL)
+        
+        if json_match:
+            api_data = json.loads(json_match.group(0))
+            last_ep_val = api_data.get('last_ep', 0)
+            last_ep_val = int(last_ep_val) if last_ep_val is not None else 0
+            last_link_val = api_data.get('last_link', '')
+            last_link_val = last_link_val if last_link_val is not None else ''
             
-        api_data = json.loads(text_resp)
-        
-        last_ep_val = api_data.get('last_ep', 0)
-        last_ep_val = int(last_ep_val) if last_ep_val is not None else 0
-        last_link_val = api_data.get('last_link', '')
-        last_link_val = last_link_val if last_link_val is not None else ''
-        
-        return last_ep_val, last_link_val
+            return last_ep_val, last_link_val
+        else:
+            err_msg = text_resp[:150] if text_resp else "لا يوجد رد (فارغ)"
+            print(f"[-] الـ API رجع بيانات غير متوقعة: {err_msg}")
+            if chat_id:
+                send_telegram_msg(f"⚠️ <b>تنبيه:</b> البوت مش قادر يقرا قاعدة البيانات للمسلسل (ID: {series_id}).\n\n<b>رد السيرفر:</b>\n<code>{escape(err_msg)}</code>", chat_id=chat_id)
+            return 0, ''
     except Exception as e:
         print(f"[-] فشل جلب آخر حلقة من الـ API للمسلسل {series_id}: {e}")
+        if chat_id:
+            send_telegram_msg(f"⚠️ <b>خطأ اتصال:</b> فشل الاتصال بقاعدة البيانات:\n<code>{escape(str(e))}</code>", chat_id=chat_id)
         return 0, ''
 
 def telegram_commands_listener():
@@ -485,7 +492,7 @@ def telegram_commands_listener():
                                 save_target_series(TARGET_SERIES)
                                 
                                 send_telegram_msg("⏳ جاري الاتصال بموقعك لمعرفة آخر حلقة مرفوعة...", chat_id=chat_id)
-                                last_ep, last_link = get_last_ep_from_api(s_id)
+                                last_ep, last_link = get_last_ep_from_api(s_id, chat_id=chat_id)
                                 
                                 series_state = load_series_state()
                                 series_state[str(s_id)] = {
@@ -600,7 +607,6 @@ def telegram_commands_listener():
             print(f"[-] خطأ غير متوقع في مستمع الأوامر: {e}")
             time.sleep(5)
 
-
 def extract_servers(episode_url, current_domain):
     data = {"is_real": False, "watch": ["", "", "", ""], "download": ["", ""]}
     try:
@@ -653,33 +659,6 @@ def extract_servers(episode_url, current_domain):
     except Exception as e:
         print(f"[-] خطأ في استخراج السيرفرات: {e}")
     return data
-
-def find_next_ep_from_vid(vid, current_domain, min_ep=0):
-    try:
-        url = f"{current_domain}/video.php?vid={vid}"
-        res = fetch_page(url)
-        if not res: return None
-        soup = BeautifulSoup(res.text, 'html.parser')
-        candidates = []
-        for a in soup.find_all('a'):
-            text = a.text.strip()
-            href = a.get('href', '')
-            if not href or 'video' not in href.lower(): continue
-            vid_m = re.search(r'vid=([a-zA-Z0-9]+)', href)
-            if not vid_m: continue
-            
-            if 'التالية' in text:
-                ep_m = re.search(r'(\d+)', text)
-                if ep_m and int(ep_m.group(1)) > min_ep:
-                    return {'vid': vid_m.group(1), 'num': int(ep_m.group(1)), 'url': get_full_url(href, current_domain)}
-            # تحسين الـ Regex ليلتقط الأرقام بشكل أدق
-            ep_m = re.search(r'(\d+)\s*حلق[ةه]|(?:ال)?حلق[ةه]\s*(\d+)|^(\d+)$', text)
-            if ep_m:
-                ep_num = int(ep_m.group(1) or ep_m.group(2) or ep_m.group(3))
-                if ep_num > min_ep: candidates.append({'vid': vid_m.group(1), 'num': ep_num, 'url': get_full_url(href, current_domain)})
-        if candidates: return min(candidates, key=lambda x: x['num'])
-    except: pass
-    return None
 
 def find_all_eps_on_page(series_info, current_domain):
     season_keyword = series_info.get('season_keyword')
@@ -773,7 +752,7 @@ def run_bot():
             bot_status["series_status"][series_name] = {"last_ep": last_ep, "status": "⏳ لا توجد حلقات في الصفحة"}
             continue
 
-        # تحديد الحلقات الجديدة التي رقمها أكبر من آخر حلقة مسجلة لدينا (مثلا أكبر من 64)
+        # تحديد الحلقات الجديدة التي رقمها أكبر من آخر حلقة مسجلة لدينا
         new_eps_to_add = [ep for ep in all_page_eps if ep['num'] > last_ep]
 
         if not new_eps_to_add:
